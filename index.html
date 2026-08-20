@@ -207,15 +207,24 @@ License: MIT
         skipEmptyLines: true
       });
 
+      // Strip thousands-separator commas (e.g. "2,727.27") before converting to
+      // a number — Number() on a comma-formatted string returns NaN, which was
+      // silently collapsing to 0 via the "|| 0" fallback.
+      const toNumber = (v) => {
+        if (v === null || v === undefined) return 0;
+        const n = Number(String(v).replace(/,/g, ''));
+        return isNaN(n) ? 0 : n;
+      };
+
       records = parsed.data
         .filter(r => (r["Project"] || '').toString().trim() !== '')
         .map(r => ({
           week: (r["Week"] || '').toString().trim(),
           project: (r["Project"] || '').toString().trim(),
           customer: (r["Customer"] || '').toString().trim(),
-          labor: Number(r["Labor Cost"] || 0),
-          material: Number(r["Material Cost"] || 0),
-          revenue: Number(r["Revenue"] || 0)
+          labor: toNumber(r["Labor Cost"]),
+          material: toNumber(r["Material Cost"]),
+          revenue: toNumber(r["Revenue"])
         }));
 
       hideError();
