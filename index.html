@@ -96,21 +96,9 @@
 .spd-table-card tr.loss { background: var(--loss-soft); }
 .spd-empty { text-align: center; padding: 40px 20px; color: var(--ink-muted); font-size: 14px; }
 
-.spd-modal { position: fixed; inset: 0; background: rgba(23,34,46,0.55); display: flex; align-items: center; justify-content: center; z-index: 999; }
-.spd-modal.hidden { display: none; }
-.spd-modal-box { background: var(--surface); width: 92%; max-width: 560px; padding: 24px; border: 1px solid var(--line); max-height: 85vh; overflow-y: auto; }
-.spd-modal-box h3 { font-family: 'Space Grotesk', sans-serif; margin: 0 0 8px; font-size: 17px; }
-.spd-modal-box p { font-size: 13px; color: var(--ink-muted); margin: 0 0 14px; line-height: 1.5; }
-.spd-modal-box textarea {
-  width: 100%; height: 140px; font-family: 'JetBrains Mono', monospace; font-size: 12px;
-  border: 1px solid var(--line); padding: 10px; margin-top: 10px; resize: vertical;
-}
-.spd-modal-box input[type=file] { font-size: 13px; }
-.spd-modal-actions { display: flex; gap: 8px; margin-top: 14px; }
-#spd-import-msg { margin-top: 10px; font-size: 13px; }
-#spd-import-msg.ok { color: var(--profit); }
-#spd-import-msg.err { color: var(--loss); }
 .spd-note { font-size: 12px; color: var(--ink-muted); margin-top: -8px; margin-bottom: 18px; }
+.spd-actions a.spd-btn { text-decoration: none; display: inline-flex; align-items: center; }
+.spd-btn:disabled { opacity: 0.6; cursor: default; }
 </style>
 
 <div id="spd-root">
@@ -123,12 +111,11 @@
       </div>
     </div>
     <div class="spd-actions">
-      <button class="spd-btn" id="spd-btn-import">+ Import weekly data</button>
-      <button class="spd-btn ghost" id="spd-btn-template">Download CSV template</button>
-      <button class="spd-btn ghost danger" id="spd-btn-reset">Clear all data</button>
+      <button class="spd-btn" id="spd-btn-refresh">⟳ Refresh data</button>
+      <a class="spd-btn ghost" id="spd-btn-open-sheet" href="https://docs.google.com/spreadsheets/d/1FBWjFwCyp7745M_5cpWn_rmWkCxjJ9alAswL5dq56rw/edit?gid=0#gid=0" target="_blank" rel="noopener">Open Google Sheet</a>
     </div>
   </div>
-  <p class="spd-note">Data is shared — anyone who opens this link, including the director, sees the same data you import.</p>
+  <p class="spd-note" id="spd-last-updated">Data is pulled live from the "Site Profit Ledger" Google Sheet — edit the sheet to update this dashboard for everyone.</p>
   <div id="spd-error-banner" style="display:none; background:var(--loss-soft); border:1px solid var(--loss); color:var(--loss); padding:10px 14px; font-size:13px; margin-bottom:16px;"></div>
 
   <div class="spd-kpis" id="spd-kpis"></div>
@@ -154,23 +141,7 @@
 
   <div class="spd-card spd-table-card">
     <h3 id="spd-table-title">Detail by project</h3>
-    <div id="spd-table-wrap"><div class="spd-empty">No data yet. Click "Import weekly data" to get started.</div></div>
-  </div>
-</div>
-
-<div class="spd-modal hidden" id="spd-modal">
-  <div class="spd-modal-box">
-    <h3>Import weekly cost data</h3>
-    <p>Choose a CSV file or paste data below. Required columns: <strong>Week, Project, Customer, Labor Cost, Material Cost, Revenue</strong>. If a row has the same Week + Project as an existing row, it will replace the old one.</p>
-    <input type="file" id="spd-file-input" accept=".csv" />
-    <textarea id="spd-csv-paste" placeholder="Week,Project,Customer,Labor Cost,Material Cost,Revenue
-2026-08-11,House A - John Smith,John Smith,15000,8000,30000
-2026-08-11,House B - Jane Doe,Jane Doe,9000,12000,20000"></textarea>
-    <div class="spd-modal-actions">
-      <button class="spd-btn" id="spd-btn-do-import">Import data</button>
-      <button class="spd-btn ghost" id="spd-btn-cancel-import">Cancel</button>
-    </div>
-    <div id="spd-import-msg"></div>
+    <div id="spd-table-wrap"><div class="spd-empty">No data yet. Loading from the Google Sheet…</div></div>
   </div>
 </div>
 
@@ -202,31 +173,11 @@ License: MIT
 </script>
 <script>
 (function(){
-  const STORAGE_KEY = 'spd-cost-records';
+  const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1FBWjFwCyp7745M_5cpWn_rmWkCxjJ9alAswL5dq56rw/gviz/tq?tqx=out:csv&sheet=JOB";
   let records = [];
   let charts = {};
 
   const $ = (id) => document.getElementById(id);
-
-  function normalize(s){
-    return (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');
-  }
-
-  function findKey(row, candidates){
-    const keys = Object.keys(row);
-    for (const k of keys){
-      const nk = normalize(k);
-      if (candidates.some(c => nk.includes(c))) return k;
-    }
-    return null;
-  }
-
-  function parseNumber(v){
-    if (v === null || v === undefined) return 0;
-    const cleaned = v.toString().replace(/[^0-9\-]/g,'');
-    const n = parseInt(cleaned, 10);
-    return isNaN(n) ? 0 : n;
-  }
 
   function fmtMoney(n){
     const sign = n < 0 ? '-' : '';
@@ -237,83 +188,48 @@ License: MIT
     return n.toFixed(1) + '%';
   }
 
-  async function loadData() {
-  const url =
-    "https://docs.google.com/spreadsheets/d/1FBWjFwCyp7745M_5cpWn_rmWkCxjJ9alAswL5dq56rw/gviz/tq?tqx=out:csv";
-
-  const csv = await fetch(url).then(r => r.text());
-
-  const parsed = Papa.parse(csv, {
-    header: true,
-    dynamicTyping: true,
-    skipEmptyLines: true
-  });
-
-  records = parsed.data.map(r => ({
-    week: r["Week"],
-    project: r["Project"],
-    customer: r["Customer"],
-    labor: Number(r["Labor Cost"] || 0),
-    material: Number(r["Material Cost"] || 0),
-    revenue: Number(r["Revenue"] || 0)
-  }));
-
-  populateProjectSelect();
-  render();
-}
-
-  async function saveData(){
+  // Always pull the latest rows straight from the "Site Profit Ledger" Google Sheet.
+  // Because this fetch runs fresh every time the page loads, opening this file
+  // (including the copy published on GitHub) always shows the sheet's current data.
+  async function loadData(isRefresh){
+    const btn = $('spd-btn-refresh');
+    if (btn){ btn.disabled = true; btn.textContent = isRefresh ? '⟳ Refreshing…' : '⟳ Loading…'; }
     try {
-      await window.storage.set(STORAGE_KEY, JSON.stringify(records), true);
-    } catch(e){
-      console.error('Storage error', e);
+      // Cache-bust so browsers/GitHub Pages don't serve a stale CSV response.
+      const url = SHEET_CSV_URL + '&_=' + Date.now();
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const csv = await res.text();
+
+      const parsed = Papa.parse(csv, {
+        header: true,
+        dynamicTyping: true,
+        skipEmptyLines: true
+      });
+
+      records = parsed.data
+        .filter(r => (r["Project"] || '').toString().trim() !== '')
+        .map(r => ({
+          week: (r["Week"] || '').toString().trim(),
+          project: (r["Project"] || '').toString().trim(),
+          customer: (r["Customer"] || '').toString().trim(),
+          labor: Number(r["Labor Cost"] || 0),
+          material: Number(r["Material Cost"] || 0),
+          revenue: Number(r["Revenue"] || 0)
+        }));
+
+      hideError();
+      const note = $('spd-last-updated');
+      if (note) note.textContent = 'Data is pulled live from the "Site Profit Ledger" Google Sheet — last refreshed ' + new Date().toLocaleString() + '.';
+    } catch (e){
+      console.error('Failed to load Google Sheet data', e);
+      showError('Could not load data from the Google Sheet: ' + (e.message || e));
+    } finally {
+      if (btn){ btn.disabled = false; btn.textContent = '⟳ Refresh data'; }
     }
-  }
 
-  function mergeRows(newRows){
-    let added = 0, replaced = 0;
-    newRows.forEach(r => {
-      const key = r.week + '|' + r.project + '|' + r.customer;
-      const idx = records.findIndex(x => (x.week+'|'+x.project+'|'+x.customer) === key);
-      if (idx >= 0){ records[idx] = r; replaced++; }
-      else { records.push(r); added++; }
-    });
-    records.sort((a,b) => a.week.localeCompare(b.week));
-    return {added, replaced};
-  }
-
-  function parseCSV(text){
-    const parsed = Papa.parse(text.trim(), {header:true, skipEmptyLines:true});
-    if (!parsed.data.length) return {rows:[], error:'Could not read any data rows.'};
-    const sample = parsed.data[0];
-    const kWeek = findKey(sample, ['week','date']);
-    const kProject = findKey(sample, ['project','job']);
-    const kCustomer = findKey(sample, ['customer','client']);
-    const kLabor = findKey(sample, ['labor','labour']);
-    const kMaterial = findKey(sample, ['material']);
-    const kRevenue = findKey(sample, ['revenue','sales']);
-    if (!kProject || !kRevenue){
-      return {rows:[], error:'Could not find a Project or Revenue column. Check your column headers.'};
-    }
-    const rows = parsed.data.filter(r => (r[kProject]||'').trim() !== '').map(r => ({
-      week: (r[kWeek]||'').trim() || 'N/A',
-      project: (r[kProject]||'').trim(),
-      customer: (r[kCustomer]||'').trim() || (r[kProject]||'').trim(),
-      labor: parseNumber(r[kLabor]),
-      material: parseNumber(r[kMaterial]),
-      revenue: parseNumber(r[kRevenue])
-    }));
-    return {rows, error: null};
-  }
-
-  function downloadTemplate(){
-    const csv = "Week,Project,Customer,Labor Cost,Material Cost,Revenue\n2026-08-11,House A - John Smith,John Smith,15000,8000,30000\n2026-08-11,House B - Jane Doe,Jane Doe,9000,12000,20000\n";
-    const blob = new Blob([csv], {type:'text/csv'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'cost_data_template.csv';
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    populateProjectSelect();
+    render();
   }
 
   // ---- Aggregation ----
@@ -388,14 +304,24 @@ License: MIT
     try {
       destroyChart('project'); destroyChart('customer');
       charts.project = new Chart($('spd-chart-project'), {
-        type: 'bar',
-        data: { labels: byProject.map(p=>p.project), datasets: [{ data: byProject.map(p=>p.profit), backgroundColor: barColors(byProject.map(p=>p.profit)) }]},
-        options: { indexAxis:'y', plugins:{legend:{display:false}, tooltip:{callbacks:{label: c => fmtMoney(c.raw)}}}, scales:{x:{ticks:{callback:v=>fmtMoney(v)}}} }
+        type: 'doughnut',
+        data: { labels: byProject.map(p=>p.project), datasets: [{ data: byProject.map(p=>Math.abs(p.profit)), backgroundColor: barColors(byProject.map(p=>p.profit)) }]},
+        options: {
+          plugins:{
+            legend:{ display:true, position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } },
+            tooltip:{ callbacks:{ label: c => `${c.label}: ${fmtMoney(byProject[c.dataIndex].profit)}` } }
+          }
+        }
       });
       charts.customer = new Chart($('spd-chart-customer'), {
-        type:'bar',
-        data:{ labels: byCustomer.map(c=>c.customer), datasets:[{ data: byCustomer.map(c=>c.profit), backgroundColor: barColors(byCustomer.map(c=>c.profit)) }]},
-        options: { indexAxis:'y', plugins:{legend:{display:false}, tooltip:{callbacks:{label: c => fmtMoney(c.raw)}}}, scales:{x:{ticks:{callback:v=>fmtMoney(v)}}} }
+        type:'doughnut',
+        data:{ labels: byCustomer.map(c=>c.customer), datasets:[{ data: byCustomer.map(c=>Math.abs(c.profit)), backgroundColor: barColors(byCustomer.map(c=>c.profit)) }]},
+        options: {
+          plugins:{
+            legend:{ display:true, position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } },
+            tooltip:{ callbacks:{ label: c => `${c.label}: ${fmtMoney(byCustomer[c.dataIndex].profit)}` } }
+          }
+        }
       });
       hideError();
     } catch(err){
@@ -417,7 +343,7 @@ License: MIT
     const byProject = aggByProject();
     $('spd-table-title').textContent = 'Detail by project';
     if (!byProject.length){
-      $('spd-table-wrap').innerHTML = '<div class="spd-empty">No data yet. Click "Import weekly data" to get started.</div>';
+      $('spd-table-wrap').innerHTML = '<div class="spd-empty">No rows found in the Google Sheet yet.</div>';
       return;
     }
     let rows = byProject.map(p => `
@@ -453,12 +379,19 @@ License: MIT
     } else {
       try {
         destroyChart('breakdown');
+        const breakdownValues = [t.revenue, labor, material, Math.abs(t.profit)];
+        const breakdownRaw = [t.revenue, labor, material, t.profit];
         charts.breakdown = new Chart($('spd-chart-breakdown'), {
-          type:'bar',
+          type:'doughnut',
           data:{ labels:['Revenue','Labor','Material','Profit'],
-            datasets:[{ data:[t.revenue, labor, material, t.profit],
+            datasets:[{ data: breakdownValues,
               backgroundColor:['#23516C','#7C93A3','#B7C4CC', t.profit>=0?'#1B8A5A':'#C63C3C'] }]},
-          options:{ plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>fmtMoney(c.raw)}}}, scales:{y:{ticks:{callback:v=>fmtMoney(v)}}} }
+          options:{
+            plugins:{
+              legend:{ display:true, position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } },
+              tooltip:{ callbacks:{ label: c => `${c.label}: ${fmtMoney(breakdownRaw[c.dataIndex])}` } }
+            }
+          }
         });
 
         destroyChart('trend');
@@ -515,39 +448,8 @@ License: MIT
 
   // ---- Events ----
   $('spd-project-select').addEventListener('change', render);
-  $('spd-btn-import').addEventListener('click', () => $('spd-modal').classList.remove('hidden'));
-  $('spd-btn-cancel-import').addEventListener('click', () => { $('spd-modal').classList.add('hidden'); $('spd-import-msg').textContent=''; });
-  $('spd-btn-template').addEventListener('click', downloadTemplate);
-  $('spd-btn-reset').addEventListener('click', async () => {
-    if (confirm('Clear all saved data (applies to everyone viewing this dashboard)? This cannot be undone.')){
-      records = [];
-      await saveData();
-      render();
-    }
-  });
+  $('spd-btn-refresh').addEventListener('click', () => loadData(true));
 
-  $('spd-file-input').addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => { $('spd-csv-paste').value = ev.target.result; };
-    reader.readAsText(file);
-  });
-
-  $('spd-btn-do-import').addEventListener('click', async () => {
-    const text = $('spd-csv-paste').value;
-    const msg = $('spd-import-msg');
-    if (!text.trim()){ msg.className='err'; msg.textContent='No data to import.'; return; }
-    const {rows, error} = parseCSV(text);
-    if (error){ msg.className='err'; msg.textContent = error; return; }
-    const {added, replaced} = mergeRows(rows);
-    await saveData();
-    msg.className = 'ok';
-    msg.textContent = `Imported ${added} new row(s), updated ${replaced} matching row(s).`;
-    render();
-    setTimeout(() => { $('spd-modal').classList.add('hidden'); $('spd-csv-paste').value=''; msg.textContent=''; }, 1200);
-  });
-
-  loadData();
+  loadData(false);
 })();
 </script>
