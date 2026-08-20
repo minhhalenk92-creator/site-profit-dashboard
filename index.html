@@ -237,15 +237,30 @@ License: MIT
     return n.toFixed(1) + '%';
   }
 
-  async function loadData(){
-    try {
-      const res = await window.storage.get(STORAGE_KEY, true);
-      records = res && res.value ? JSON.parse(res.value) : [];
-    } catch(e){
-      records = [];
-    }
-    render();
-  }
+  async function loadData() {
+  const url =
+    "https://docs.google.com/spreadsheets/d/1FBWjFwCyp7745M_5cpWn_rmWkCxjJ9alAswL5dq56rw/gviz/tq?tqx=out:csv";
+
+  const csv = await fetch(url).then(r => r.text());
+
+  const parsed = Papa.parse(csv, {
+    header: true,
+    dynamicTyping: true,
+    skipEmptyLines: true
+  });
+
+  records = parsed.data.map(r => ({
+    week: r["Week"],
+    project: r["Project"],
+    customer: r["Customer"],
+    labor: Number(r["Labor Cost"] || 0),
+    material: Number(r["Material Cost"] || 0),
+    revenue: Number(r["Revenue"] || 0)
+  }));
+
+  populateProjectSelect();
+  render();
+}
 
   async function saveData(){
     try {
