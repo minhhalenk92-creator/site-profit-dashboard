@@ -331,6 +331,17 @@ License: MIT
     `;
   }
 
+  // Doughnut chart bị "nuốt" mất lát cắt quá nhỏ (viền trắng giữa các lát đè hết
+  // phần màu). Hàm này chỉ NỚI ĐỘ RỘNG HIỂN THỊ tối thiểu cho các lát quá bé để
+  // mắt còn thấy được màu — số tiền thật hiển thị trong tooltip vẫn lấy từ dữ
+  // liệu gốc (byProject/byCustomer), không bị ảnh hưởng.
+  function visualSlices(values, minSharePct = 3){
+    const total = values.reduce((s,v)=>s+v,0);
+    if (!total || values.length < 2) return values.slice();
+    const minVal = total * (minSharePct / 100);
+    return values.map(v => Math.max(v, minVal));
+  }
+
   function renderOverviewCharts(){
     const byProject = aggByProject();
     const byCustomer = aggByCustomer();
@@ -344,7 +355,7 @@ License: MIT
       destroyChart('project'); destroyChart('customer');
       charts.project = new Chart($('spd-chart-project'), {
         type: 'doughnut',
-        data: { labels: byProject.map(p=>p.project), datasets: [{ data: byProject.map(p=>Math.abs(p.profit)), backgroundColor: byProject.map(p=>getCustomerColor(p.customer)) }]},
+        data: { labels: byProject.map(p=>p.project), datasets: [{ data: visualSlices(byProject.map(p=>Math.abs(p.profit))), backgroundColor: byProject.map(p=>getCustomerColor(p.customer)), borderWidth: 1 }]},
         options: {
           plugins:{
             legend:{ display:true, position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } },
@@ -354,7 +365,7 @@ License: MIT
       });
       charts.customer = new Chart($('spd-chart-customer'), {
         type:'doughnut',
-        data:{ labels: byCustomer.map(c=>c.customer), datasets:[{ data: byCustomer.map(c=>Math.abs(c.profit)), backgroundColor: byCustomer.map(c=>getCustomerColor(c.customer)) }]},
+        data:{ labels: byCustomer.map(c=>c.customer), datasets:[{ data: visualSlices(byCustomer.map(c=>Math.abs(c.profit))), backgroundColor: byCustomer.map(c=>getCustomerColor(c.customer)), borderWidth: 1 }]},
         options: {
           plugins:{
             legend:{ display:true, position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } },
